@@ -30,13 +30,17 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.hankcs.algorithm.AhoCorasickDoubleArrayTrie;
 import com.hankcs.algorithm.AhoCorasickDoubleArrayTrie.Hit;
 
+/**
+ * 地址解析实现类，用于从文本中提取省市区信息
+ * 使用Aho-Corasick算法实现高效的地址匹配
+ */
 public class CpcaExtractorImpl implements CpcaExtractor {
 	private final static Logger logger = LoggerFactory.getLogger(CpcaExtractorImpl.class);
-	private final static int CPCA_CODE_SIZE = 12;
-	private final static int CPCA_CODE_PROV_SIZE = 2;
-	private final static int CPCA_CODE_CITY_SIZE = 4;
-	private final static int CPCA_CODE_COUNTY_SIZE = 6;
-	private static ObjectMapper mapper = new ObjectMapper();
+	private final static int CPCA_CODE_SIZE = 12; // 行政区划代码总长度
+	private final static int CPCA_CODE_PROV_SIZE = 2; // 省级代码长度
+	private final static int CPCA_CODE_CITY_SIZE = 4; // 市级代码长度
+	private final static int CPCA_CODE_COUNTY_SIZE = 6; // 县级代码长度
+	private static ObjectMapper mapper = new ObjectMapper(); // JSON序列化工具
 	static {
 		// 忽略在JSON字符串中存在但Java对象实际没有的属
 		// mapper.getSerializationConfig().
@@ -49,20 +53,21 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 	 * 410506000000,龙安区,114.301331,36.076225 . . .
 	 * 441700000000,阳江市,111.982589,21.857887
 	 */
-	private String cpcaCvsFile;
-	private Map<String, AddressInfo> addressInfoMap = new HashMap<>(3500);
+	private String cpcaCvsFile; // 行政区划代码CSV文件路径
+	private Map<String, AddressInfo> addressInfoMap = new HashMap<>(3800); // 地址信息映射表
 	// 停用词包括: 省, 市, 特别行政区, 自治区。之所以 区 和 县 不作为停用词，是因为 区县 数目太多, 去掉 "区" 字 或者 "县" 字后很容易误配
 	private Pattern stopKey = Pattern.compile("([省市]|特别行政区|自治区)$");
 	// 自治区简写
 	private Map<String, String> zzqSimplify = new HashMap<>();
 	// 道路带省或市的
 	private List<String> loadNameSuffixs_2 = Arrays.asList("大路", "大道", "大街", "东路", "南路", "西路", "北路", "东街", "南街", "西街",
-			"北街", "街道", "胡同");
+		"北街", "街道", "胡同");
+	// 道路后缀列表（单字）
 	private List<String> loadNameSuffixs_1 = Arrays.asList("路", "街", "道");
 	// 村
 	private List<String> villageNameSuffixs_1 = Arrays.asList("村", "屯", "庄", "家", "山", "河", "沟", "湾", "坪", "塘", "坝",
-			"岗", "场", "湖", "岭", "堡", "坡", "峪", "岩", "溪", "凼", "岛");
-	//
+		"岗", "场", "湖", "岭", "堡", "坡", "峪", "岩", "溪", "凼", "岛");
+	// Aho-Corasick双数组字典树，用于高效匹配地址
 	AhoCorasickDoubleArrayTrie<MatchAddressInfo> acdat = new AhoCorasickDoubleArrayTrie<>();
 
 	/**
@@ -147,6 +152,13 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 		}
 	}
 
+	/**
+	 * 从文本中提取地址信息
+	 * @param location 待解析的地址文本
+	 * @param umap 自定义映射表，用于处理同名地区
+	 * @param strictlyMatch 是否严格匹配
+	 * @return 解析后的地址信息对象
+	 */
 	@Override
 	public CpcaSeg transform(String location, Map<String, String> umap, boolean strictlyMatch) {
 		if (location == null || location.trim().equals("")) {
@@ -472,18 +484,23 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 		return false;
 	}
 
-	private void updateCpcaSeg(CpcaSeg cpcaSeg, String cpcaCode) {
+private void updateCpcaSeg(CpcaSeg cpcaSeg, String cpcaCode) {
 		if (cpcaCode.endsWith("0000")) {
 			cpcaSeg.setProvinceName(getCpcaName(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE)));
+			cpcaSeg.setProvinceCode(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE) + "0000");
 			return;
 		}
 		if (cpcaCode.endsWith("00")) {
 			cpcaSeg.setProvinceName(getCpcaName(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE)));
+			cpcaSeg.setProvinceCode(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE) + "0000");
 			cpcaSeg.setCityName(getCpcaName(cpcaCode.substring(0, CPCA_CODE_CITY_SIZE)));
+			cpcaSeg.setCityCode(cpcaCode.substring(0, CPCA_CODE_CITY_SIZE) + "00");
 			return;
 		}
 		cpcaSeg.setProvinceName(getCpcaName(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE)));
+		cpcaSeg.setProvinceCode(cpcaCode.substring(0, CPCA_CODE_PROV_SIZE) + "0000");
 		cpcaSeg.setCityName(getCpcaName(cpcaCode.substring(0, CPCA_CODE_CITY_SIZE)));
+		cpcaSeg.setCityCode(cpcaCode.substring(0, CPCA_CODE_CITY_SIZE) + "00");
 		cpcaSeg.setAreaName(getCpcaName(cpcaCode));
 	}
 
@@ -509,8 +526,16 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 		return addressInfo == null ? null : addressInfo.getName();
 	}
 
-	private void loadCpca() throws IOException {
+	/**
+	 * 加载行政区划代码数据
+	 * 从CSV文件中读取地址信息并填充到指定的Map中
+	 * @param acMap Aho-Corasick字典树映射表
+	 * @param addressInfoMap 地址信息映射表
+	 * @throws IOException 文件读取异常
+	 */
+	private void loadCpcaData(TreeMap<String, MatchAddressInfo> acMap, Map<String, AddressInfo> addressInfoMap) throws IOException {
 		String fileName;
+		logger.info("cpcaCvsFile={}", cpcaCvsFile);
 		if (cpcaCvsFile == null || cpcaCvsFile.equals("")) {
 			throw new IOException("input file is null");
 		} else {
@@ -531,37 +556,57 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 				}
 			}
 		}
+		
 		InputStream in = null;
-		if (fileName.contains("BOOT-INF/classes")) {
-			in = CpcaExtractorImpl.class.getResourceAsStream("/" + cpcaCvsFile);
-		} else {
-			in = new FileInputStream(new File(fileName));
-		}
-		TreeMap<String, MatchAddressInfo> acMap = new TreeMap<>();
-		BufferedReader reader = new BufferedReader(new InputStreamReader(in));
-		String line = reader.readLine();
-		// 第一行 adcode,name,longitude,latitude 跳过处理
-		line = reader.readLine();
-		while (line != null) {
-			String[] fields = split(line, ",");
-			String name = fields[1];
-			String cpcaCode = fields[0];
-			AddressInfo addressInfo = new AddressInfo(name, cpcaCode);
-			addressInfoMap.put(cpcaCode, addressInfo);
-			MatchAddressInfo matchAddressInfo = acMap.get(name);
-			if (matchAddressInfo != null) {
-				matchAddressInfo.addAddressInfo(addressInfo);
+		try {
+			if (fileName.contains("BOOT-INF/classes")) {
+				in = CpcaExtractorImpl.class.getResourceAsStream("/" + cpcaCvsFile);
 			} else {
-				List<AddressInfo> addressInfos = new ArrayList<>(Arrays.asList(addressInfo));
-				acMap.put(name, new MatchAddressInfo(name, addressInfos));
-				String simplifyName = simplifyName(name);
-				if (!simplifyName.equals(name)) {
-					acMap.put(simplifyName, new MatchAddressInfo(simplifyName, addressInfos));
+				in = new FileInputStream(new File(fileName));
+			}
+			BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+			String line = reader.readLine();
+			// 第一行 adcode,name,longitude,latitude 跳过处理
+			line = reader.readLine();
+			while (line != null) {
+				String[] fields = split(line, ",");
+				String name = fields[1];
+				String cpcaCode = fields[0];
+				AddressInfo addressInfo = new AddressInfo(name, cpcaCode);
+				addressInfoMap.put(cpcaCode, addressInfo);
+				MatchAddressInfo matchAddressInfo = acMap.get(name);
+				if (matchAddressInfo != null) {
+					matchAddressInfo.addAddressInfo(addressInfo);
+				} else {
+					List<AddressInfo> addressInfos = new ArrayList<>(Arrays.asList(addressInfo));
+					acMap.put(name, new MatchAddressInfo(name, addressInfos));
+					String simplifyName = simplifyName(name);
+					if (!simplifyName.equals(name)) {
+						acMap.put(simplifyName, new MatchAddressInfo(simplifyName, addressInfos));
+					}
+				}
+				line = reader.readLine();
+			}
+			reader.close();
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (IOException e) {
+					logger.error(e.getMessage(), e);
 				}
 			}
-			line = reader.readLine();
 		}
-		reader.close();
+	}
+
+	/**
+	 * 加载行政区划代码数据
+	 * 从CSV文件中读取地址信息并构建Aho-Corasick字典树
+	 * @throws IOException 文件读取异常
+	 */
+	private void loadCpca() throws IOException {
+		TreeMap<String, MatchAddressInfo> acMap = new TreeMap<>();
+		loadCpcaData(acMap, addressInfoMap);
 		acdat.build(acMap);
 		logger.info("cpca字典导入完成，共  {} 条记录", addressInfoMap.size());
 	}
@@ -807,8 +852,31 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 		return returnStr;
 	}
 
+	/**
+	 * 重新加载adcodes.csv文件
+	 * 只有加载完后才进行替换，不影响正在执行的数据
+	 * @throws IOException
+	 */
+	public synchronized void reloadCpca() throws IOException {
+		// 创建新的数据结构
+		Map<String, AddressInfo> newAddressInfoMap = new HashMap<>(3800);
+		TreeMap<String, MatchAddressInfo> newAcMap = new TreeMap<>();
+		
+		// 使用公共方法加载数据
+		loadCpcaData(newAcMap, newAddressInfoMap);
+		
+		// 构建新的Aho-Corasick双数组字典树
+		AhoCorasickDoubleArrayTrie<MatchAddressInfo> newAcdat = new AhoCorasickDoubleArrayTrie<>();
+		newAcdat.build(newAcMap);
+		logger.info("cpca字典重新加载完成，共  {} 条记录", newAddressInfoMap.size());
+		
+		// 一次性替换旧的数据结构
+		this.addressInfoMap = newAddressInfoMap;
+		this.acdat = newAcdat;
+	}
+
 	public static void main(String[] args) {
-		CpcaExtractorImpl cpcaExtractor = new CpcaExtractorImpl("adcodes.csv");
+		CpcaExtractorImpl cpcaExtractor = new CpcaExtractorImpl("adcodes_copy.csv");
 		CpcaSeg cpcaSeg = cpcaExtractor.transform("浙江省杭州市拱墅区祥园路300号");
 		System.out.println(cpcaExtractor.encodeJson(cpcaSeg));
 		assertEquals("浙江省", cpcaSeg.getProvinceName());
@@ -994,6 +1062,17 @@ public class CpcaExtractorImpl implements CpcaExtractor {
 		assertEquals("杭州市", cpcaSeg.getCityName());
 		assertEquals(null, cpcaSeg.getAreaName());
 		assertEquals("杭州第十中学", cpcaSeg.getAddress());
+		// 测试重新加载方法
+		try {
+			System.out.println("测试重新加载方法...");
+			cpcaExtractor.reloadCpca();
+			System.out.println("重新加载成功！");
+			// 重新加载后再次测试
+			cpcaSeg = cpcaExtractor.transform("浙江省杭州市拱墅区祥园路300号");
+			System.out.println("重新加载后测试结果：" + cpcaExtractor.encodeJson(cpcaSeg));
+		} catch (IOException e) {
+			System.out.println("重新加载失败：" + e.getMessage());
+		}
 		// int count = 1000000;
 		// Long t1 = System.currentTimeMillis();
 		// for(int i=0;i<count;i++) {

@@ -28,4 +28,13 @@ public interface CpcaExtractor {
 	 * @return
 	 */
 	public CpcaSeg transform(String location, Map<String, String> umap, boolean strictlyMatch);
+	
+	/**
+	 * 重新加载adcodes.csv文件
+	 * 只有加载完后才进行替换，不影响正在执行的数据
+	 * @throws java.io.IOException
+	 */
+	default void reloadCpca() throws java.io.IOException {
+		// 默认实现，子类可以覆盖
+	}
 }
